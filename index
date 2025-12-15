@@ -19,8 +19,7 @@
     // ⚙️ CONFIGURATION
     // ============================================================================
     
-    // ⚠️ IMPORTANT: REPLACE THIS WITH YOUR *INVENTORY* SCRIPT URL
-    const GOOGLE_SCRIPT_URL = 'REPLACE_WITH_YOUR_INVENTORY_SCRIPT_URL';
+    const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwI1CQee4vfNrY24orwXja0bK63hyofF_JPwuZATwQ3CxDjyLZOyByQiRL7huHBVPgF/exec';
     const SITE_PASSWORD = 'CompassTesting2025!';
 
     // ============================================================================
