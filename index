@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DSC Inventory Tracker</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    // ============================================================================
+    // ⚙️ CONFIGURATION
+    // ============================================================================
+    
+    // ⚠️ IMPORTANT: REPLACE THIS WITH YOUR *INVENTORY* SCRIPT URL
+    const GOOGLE_SCRIPT_URL = 'REPLACE_WITH_YOUR_INVENTORY_SCRIPT_URL';
+    const SITE_PASSWORD = 'CompassTesting2025!';
+
+    // ============================================================================
+    // HELPER FUNCTIONS (Sound & Audio)
+    // ============================================================================
+    
+    function playSound(type) {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      if (type === 'success') {
+        oscillator.frequency.value = 1200; // High pitch
+        oscillator.type = 'sine';
+        gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.1);
+      } else {
+        oscillator.frequency.value = 200; // Low pitch (Error)
+        oscillator.type = 'sawtooth';
+        gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.3);
+      }
+    }
+
+    // ============================================================================
+    // LOGIN COMPONENT
+    // ============================================================================
+    
+    function LoginScreen({ onLogin }) {
+      const [password, setPassword] = useState('');
+      const [error, setError] = useState('');
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (password === SITE_PASSWORD) {
+          playSound('success');
+          onLogin();
+        } else {
+          setError('Incorrect password.');
+          playSound('error');
+          setPassword('');
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
+            <h1 className="text-2xl font-bold text-white text-center mb-6">DSC INVENTORY</h1>
+            <form onSubmit={handleSubmit}>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter Password"
+                className="w-full bg-slate-950 border border-slate-800 text-white text-lg rounded-xl p-4 mb-4 focus:outline-none focus:border-blue-500 transition-all"
+                autoFocus
+              />
+              <button className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-xl transition-all">
+                ACCESS SYSTEM
+              </button>
+            </form>
+            {error && <p className="text-red-400 text-center mt-4">{error}</p>}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // MAIN INVENTORY TRACKER COMPONENT
+    // ============================================================================
+    
+    function InventoryTracker({ onLogout }) {
+      // Data State
+      const [validNames, setValidNames] = useState([]);
+      const [validParts, setValidParts] = useState([]);
+      const [validLocations, setValidLocations] = useState([]);
+      
+      // Transaction State
+      const [scanMode, setScanMode] = useState('action'); // 'action', 'location', 'employee', 'part'
+      const [action, setAction] = useState('');
+      const [locationName, setLocationName] = useState('');
+      const [employeeName, setEmployeeName] = useState('');
+      const [parts, setParts] = useState([]);
+      
+      // UI State
+      const [scanInput, setScanInput] = useState('');
+      const [status, setStatus] = useState('Ready. Scan 1 (Receive) or 2 (Send).');
+      const [statusType, setStatusType] = useState('normal'); // 'normal', 'success', 'error'
+      const [isSubmitting, setIsSubmitting] = useState(false);
+      const inputRef = useRef(null);
+
+      // --- INITIAL LOAD ---
+      useEffect(() => {
+        fetch(GOOGLE_SCRIPT_URL)
+          .then(res => res.json())
+          .then(data => {
+            if (data.names) setValidNames(data.names);
+            if (data.parts) setValidParts(data.parts);
+            if (data.locations) setValidLocations(data.locations);
+          })
+          .catch(err => console.error("Error loading config:", err));
+          
+        if (inputRef.current) inputRef.current.focus();
+      }, []);
+
+      // Re-focus input on state change
+      useEffect(() => {
+        if (inputRef.current && !isSubmitting) inputRef.current.focus();
+      }, [scanMode, parts, status]);
+
+
+      // --- SCANNER LOGIC ---
+      const handleScan = (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const value = scanInput.trim();
+          if (!value) return;
+
+          // 1. ACTION MODE (Receive / Send)
+          if (scanMode === 'action') {
+            const lowerVal = value.toLowerCase();
+            
+            // --- RECEIVE LOGIC (Auto-Skip Location) ---
+            if (lowerVal.includes('receive') || value === '1') {
+              setAction('Receive');
+              setLocationName('Vendor / Inbound'); // Auto-fill
+              setScanMode('employee');             // Jump to Step 3
+              setStatus('Action: RECEIVE. Scan Employee Name.', 'success');
+              playSound('success');
+            } 
+            // --- SEND LOGIC (Standard) ---
+            else if (lowerVal.includes('send') || value === '2') {
+              setAction('Send');
+              setScanMode('location');             // Go to Step 2
+              setStatus('Action: SEND. Scan Destination.', 'success');
+              playSound('success');
+            } 
+            else {
+              setStatus('Invalid Action. Type 1 or 2.', 'error');
+              playSound('error');
+            }
+          }
+
+          // 2. LOCATION MODE (Only for "Send")
+          else if (scanMode === 'location') {
+            // Check if it's in our dropdown list OR a custom name
+            // For now, we accept anything, but you could restrict it to validLocations
+            setLocationName(value);
+            setScanMode('employee');
+            setStatus(`Location: ${value}. Scan Employee.`, 'success');
+            playSound('success');
+          }
+
+          // 3. EMPLOYEE MODE
+          else if (scanMode === 'employee') {
+            setEmployeeName(value);
+            setScanMode('part');
+            setStatus(`Welcome, ${value}. Scan Parts now.`, 'success');
+            playSound('success');
+          }
+
+          // 4. PART MODE (Scanning Items)
+          else if (scanMode === 'part') {
+             // Simple Quantity Parser (e.g. "Fan-120MM" or "Fan-120MM * 5")
+             let qty = 1;
+             let partName = value;
+             
+             // If user typed "PartName * 5"
+             if (value.includes('*')) {
+               const parts = value.split('*');
+               partName = parts[0].trim();
+               qty = parseInt(parts[1].trim()) || 1;
+             }
+             
+             // Add to list
+             const newPart = { id: Date.now(), part: partName, quantity: qty };
+             setParts(prev => [...prev, newPart]);
+             setStatus(`Added: ${partName} (x${qty})`, 'success');
+             playSound('success');
+          }
+
+          setScanInput(''); // Clear box
+        }
+      };
+
+      // --- SUBMIT LOGIC ---
+      const handleSubmit = async () => {
+        if (parts.length === 0) {
+          setStatus('Error: No parts scanned.', 'error');
+          playSound('error');
+          return;
+        }
+
+        setIsSubmitting(true);
+        setStatus('Submitting to Database...', 'normal');
+
+        const payload = {
+          action: action,
+          locationName: locationName,
+          employeeName: employeeName,
+          parts: parts
+        };
+
+        try {
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          // Reset for next transaction
+          setStatus('Transaction Saved! Ready for next.', 'success');
+          playSound('success');
+          
+          setTimeout(() => {
+             setParts([]);
+             setScanMode('action');
+             setAction('');
+             setLocationName('');
+             setEmployeeName('');
+             setIsSubmitting(false);
+             setStatus('Ready. Scan 1 (Receive) or 2 (Send).', 'normal');
+          }, 1500);
+
+        } catch (err) {
+          setStatus('Network Error. Check Console.', 'error');
+          playSound('error');
+          setIsSubmitting(false);
+        }
+      };
+
+      // --- RENDER ---
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-300 p-4 md:p-8 font-sans">
+          
+          {/* HEADER */}
+          <div className="max-w-5xl mx-auto mb-8 flex justify-between items-center bg-slate-900/50 p-4 rounded-xl border border-slate-800 backdrop-blur">
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-lg shadow-blue-500/30">DS</div>
+              <div>
+                <h1 className="text-white font-bold tracking-wider">DSC INVENTORY</h1>
+                <p className="text-xs text-blue-400">HUB CONTROL</p>
+              </div>
+            </div>
+            <button onClick={onLogout} className="text-xs font-bold text-slate-500 hover:text-red-400 transition-colors uppercase">Log Out</button>
+          </div>
+
+          <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            {/* LEFT COLUMN: CONTROLS */}
+            <div className="md:col-span-2 space-y-6">
+              
+              {/* SCANNER CARD */}
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-600 to-cyan-500 opacity-50"></div>
+                
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 block">
+                  {scanMode === 'action' ? 'Select Action' : 
+                   scanMode === 'location' ? 'Select Location' :
+                   scanMode === 'employee' ? 'Technician ID' : 'Scan Items'}
+                </label>
+
+                {/* DYNAMIC INPUT OR DROPDOWNS could go here, but for now we stick to the main scanner text box */}
+                <div className="relative mb-4">
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={scanInput}
+                    onChange={(e) => setScanInput(e.target.value)}
+                    onKeyDown={handleScan}
+                    placeholder={
+                      scanMode === 'action' ? "Type 1 (Receive) or 2 (Send)..." :
+                      scanMode === 'location' ? "Scan Location..." :
+                      scanMode === 'employee' ? "Scan Badge..." : "Scan Part..."
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 text-white text-2xl font-mono rounded-xl p-5 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all shadow-inner placeholder-slate-700"
+                    autoFocus
+                    disabled={isSubmitting}
+                  />
+                </div>
+
+                {/* STATUS BAR */}
+                <div className={`p-4 rounded-xl border ${
+                  statusType === 'error' ? 'bg-red-900/20 border-red-500/30 text-red-300' :
+                  statusType === 'success' ? 'bg-green-900/20 border-green-500/30 text-green-300' :
+                  'bg-slate-950 border-slate-800 text-slate-400'
+                }`}>
+                  <p className="font-mono text-sm flex items-center gap-2">
+                    {statusType === 'success' && '✓'}
+                    {statusType === 'error' && '⚠️'}
+                    {status}
+                  </p>
+                </div>
+              </div>
+
+              {/* ACTION BUTTONS (Only show in Action Mode) */}
+              {scanMode === 'action' && (
+                <div className="grid grid-cols-2 gap-4">
+                  {['Receive', 'Send'].map((act, idx) => (
+                    <button
+                      key={act}
+                      onClick={() => {
+                        setAction(act);
+                        if (act === 'Receive') {
+                          setLocationName('Vendor / Inbound');
+                          setScanMode('employee');
+                          setStatus('Action: RECEIVE. Scan Employee Name.', 'success');
+                        } else {
+                          setScanMode('location');
+                          setStatus('Action: SEND. Scan Destination.', 'success');
+                        }
+                        playSound('success');
+                      }}
+                      className="py-6 rounded-xl bg-slate-800 border border-slate-700 hover:border-blue-500 hover:bg-slate-700 text-slate-300 hover:text-white transition-all font-bold uppercase tracking-wider group relative overflow-hidden"
+                    >
+                      <span className="absolute top-2 left-4 text-xs text-slate-600 font-mono group-hover:text-blue-400">0{idx + 1}</span>
+                      <span className="relative z-10 text-xl">{act}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* FINISH BUTTON (Only show if parts exist) */}
+              {parts.length > 0 && (
+                <button
+                  onClick={handleSubmit}
+                  disabled={isSubmitting}
+                  className="w-full py-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-lg shadow-lg shadow-blue-600/20 transition-all flex items-center justify-center gap-3"
+                >
+                  {isSubmitting ? 'SAVING...' : `SUBMIT TRANSACTION (${parts.length} Items)`}
+                </button>
+              )}
+
+            </div>
+
+            {/* RIGHT COLUMN: SUMMARY */}
+            <div className="space-y-6">
+              
+              {/* TRANSACTION INFO CARD (The Layout Fix!) */}
+              <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl shadow-lg">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Transaction Details</h3>
+                
+                {/* BALANCED LAYOUT: 3 Equal Columns */}
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  
+                  {/* ACTION */}
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-center text-center">
+                    <span className="block text-[10px] text-slate-500 uppercase tracking-wider mb-1">Action</span>
+                    <span className="text-blue-400 font-bold text-sm md:text-base leading-none">
+                      {action || '...'}
+                    </span>
+                  </div>
+
+                  {/* LOCATION (With Auto-Fit Text) */}
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-center text-center relative overflow-hidden">
+                    <span className="block text-[10px] text-slate-500 uppercase tracking-wider mb-1">Location</span>
+                    <span className={`font-bold text-white leading-tight break-words
+                      ${(locationName && locationName.length > 10) ? 'text-xs' : 'text-sm md:text-base'}
+                    `}>
+                      {locationName || '...'}
+                    </span>
+                  </div>
+
+                  {/* EMPLOYEE */}
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-center text-center">
+                    <span className="block text-[10px] text-slate-500 uppercase tracking-wider mb-1">Employee</span>
+                    <span className="text-green-400 font-bold text-sm md:text-base leading-none truncate">
+                      {employeeName || '...'}
+                    </span>
+                  </div>
+                  
+                </div>
+
+                <div className="border-t border-slate-800 pt-4 mt-4">
+                  <div className="flex justify-between items-center mb-2">
+                     <span className="text-xs text-slate-500 uppercase">Items Scanned</span>
+                     <span className="bg-slate-800 text-white text-xs px-2 py-1 rounded-md border border-slate-700">{parts.length}</span>
+                  </div>
+                  <div className="max-h-[300px] overflow-y-auto pr-2 custom-scrollbar space-y-2">
+                    {parts.length === 0 ? (
+                      <div className="text-center py-8 opacity-30">
+                        <span className="text-4xl block mb-2">📦</span>
+                        <span className="text-xs">Waiting for parts...</span>
+                      </div>
+                    ) : (
+                      parts.map((p, i) => (
+                        <div key={i} className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex justify-between items-center group hover:border-slate-600 transition-all">
+                          <div>
+                            <p className="text-white text-sm font-medium">{p.part}</p>
+                            <p className="text-xs text-slate-500">Qty: {p.quantity}</p>
+                          </div>
+                          <button 
+                            onClick={() => setParts(parts.filter((_, idx) => idx !== i))}
+                            className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                          >✕</button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // ROOT APP
+    // ============================================================================
+    
+    function App() {
+      const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+      if (!isAuthenticated) {
+        return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
+      }
+
+      return <InventoryTracker onLogout={() => setIsAuthenticated(false)} />;
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
