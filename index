@@ -19,11 +19,12 @@
     // ⚙️ CONFIGURATION
     // ============================================================================
     
+    // ⚠️ IMPORTANT: CHECK YOUR URL
     const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwI1CQee4vfNrY24orwXja0bK63hyofF_JPwuZATwQ3CxDjyLZOyByQiRL7huHBVPgF/exec';
     const SITE_PASSWORD = 'CompassTesting2025!';
 
     // ============================================================================
-    // HELPER FUNCTIONS (Sound & Audio)
+    // HELPER FUNCTIONS
     // ============================================================================
     
     function playSound(type) {
@@ -35,14 +36,14 @@
       gainNode.connect(audioContext.destination);
       
       if (type === 'success') {
-        oscillator.frequency.value = 1200; // High pitch
+        oscillator.frequency.value = 1200; 
         oscillator.type = 'sine';
         gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 0.1);
       } else {
-        oscillator.frequency.value = 200; // Low pitch (Error)
+        oscillator.frequency.value = 200; 
         oscillator.type = 'sawtooth';
         gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
@@ -111,10 +112,14 @@
       const [employeeName, setEmployeeName] = useState('');
       const [parts, setParts] = useState([]);
       
+      // QUANTITY LOGIC STATE (NEW)
+      const [awaitingQuantity, setAwaitingQuantity] = useState(false);
+      const [pendingPartName, setPendingPartName] = useState('');
+
       // UI State
       const [scanInput, setScanInput] = useState('');
       const [status, setStatus] = useState('Ready. Scan 1 (Receive) or 2 (Send).');
-      const [statusType, setStatusType] = useState('normal'); // 'normal', 'success', 'error'
+      const [statusType, setStatusType] = useState('normal'); 
       const [isSubmitting, setIsSubmitting] = useState(false);
       const inputRef = useRef(null);
 
@@ -135,7 +140,7 @@
       // Re-focus input on state change
       useEffect(() => {
         if (inputRef.current && !isSubmitting) inputRef.current.focus();
-      }, [scanMode, parts, status]);
+      }, [scanMode, parts, status, awaitingQuantity]);
 
 
       // --- SCANNER LOGIC ---
@@ -145,22 +150,19 @@
           const value = scanInput.trim();
           if (!value) return;
 
-          // 1. ACTION MODE (Receive / Send)
+          // 1. ACTION MODE
           if (scanMode === 'action') {
             const lowerVal = value.toLowerCase();
-            
-            // --- RECEIVE LOGIC (Auto-Skip Location) ---
             if (lowerVal.includes('receive') || value === '1') {
               setAction('Receive');
-              setLocationName('Vendor / Inbound'); // Auto-fill
-              setScanMode('employee');             // Jump to Step 3
+              setLocationName('Vendor / Inbound'); 
+              setScanMode('employee');             
               setStatus('Action: RECEIVE. Scan Employee Name.', 'success');
               playSound('success');
             } 
-            // --- SEND LOGIC (Standard) ---
             else if (lowerVal.includes('send') || value === '2') {
               setAction('Send');
-              setScanMode('location');             // Go to Step 2
+              setScanMode('location');             
               setStatus('Action: SEND. Scan Destination.', 'success');
               playSound('success');
             } 
@@ -170,10 +172,8 @@
             }
           }
 
-          // 2. LOCATION MODE (Only for "Send")
+          // 2. LOCATION MODE
           else if (scanMode === 'location') {
-            // Check if it's in our dropdown list OR a custom name
-            // For now, we accept anything, but you could restrict it to validLocations
             setLocationName(value);
             setScanMode('employee');
             setStatus(`Location: ${value}. Scan Employee.`, 'success');
@@ -188,27 +188,42 @@
             playSound('success');
           }
 
-          // 4. PART MODE (Scanning Items)
+          // 4. PART MODE (Scanning Items) - UPDATED FOR QUANTITY
           else if (scanMode === 'part') {
-             // Simple Quantity Parser (e.g. "Fan-120MM" or "Fan-120MM * 5")
-             let qty = 1;
-             let partName = value;
              
-             // If user typed "PartName * 5"
-             if (value.includes('*')) {
-               const parts = value.split('*');
-               partName = parts[0].trim();
-               qty = parseInt(parts[1].trim()) || 1;
+             // A. IF WAITING FOR QUANTITY (User typed a number)
+             if (awaitingQuantity) {
+               const qty = parseInt(value);
+               
+               if (isNaN(qty) || qty <= 0) {
+                 setStatus(`Invalid Quantity. How many ${pendingPartName}?`, 'error');
+                 playSound('error');
+                 setScanInput(''); // Clear bad input but keep waiting
+                 return;
+               }
+
+               // Valid Number -> Add to Cart
+               const newPart = { id: Date.now(), part: pendingPartName, quantity: qty };
+               setParts(prev => [...prev, newPart]);
+               
+               // Reset State
+               setAwaitingQuantity(false);
+               setPendingPartName('');
+               setStatus(`Added: ${pendingPartName} (x${qty})`, 'success');
+               playSound('success');
              }
-             
-             // Add to list
-             const newPart = { id: Date.now(), part: partName, quantity: qty };
-             setParts(prev => [...prev, newPart]);
-             setStatus(`Added: ${partName} (x${qty})`, 'success');
-             playSound('success');
+
+             // B. IF SCANNING A NEW PART (First step)
+             else {
+               // Verify it's not a command
+               setPendingPartName(value); // Save the part name
+               setAwaitingQuantity(true); // Switch mode to "Quantity"
+               setStatus(`Part Identified: ${value}. ENTER QUANTITY.`, 'normal'); // Prompt user
+               // Do NOT play success sound yet, wait for quantity
+             }
           }
 
-          setScanInput(''); // Clear box
+          setScanInput(''); // Clear box for next input
         }
       };
 
@@ -238,7 +253,6 @@
             body: JSON.stringify(payload)
           });
 
-          // Reset for next transaction
           setStatus('Transaction Saved! Ready for next.', 'success');
           playSound('success');
           
@@ -282,15 +296,17 @@
               
               {/* SCANNER CARD */}
               <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-600 to-cyan-500 opacity-50"></div>
+                <div className={`absolute top-0 left-0 w-full h-1 opacity-50 
+                  ${awaitingQuantity ? 'bg-gradient-to-r from-yellow-400 to-orange-500' : 'bg-gradient-to-r from-blue-600 to-cyan-500'}
+                `}></div>
                 
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 block">
                   {scanMode === 'action' ? 'Select Action' : 
                    scanMode === 'location' ? 'Select Location' :
-                   scanMode === 'employee' ? 'Technician ID' : 'Scan Items'}
+                   scanMode === 'employee' ? 'Technician ID' : 
+                   awaitingQuantity ? 'QUANTITY REQUIRED' : 'Scan Items'}
                 </label>
 
-                {/* DYNAMIC INPUT OR DROPDOWNS could go here, but for now we stick to the main scanner text box */}
                 <div className="relative mb-4">
                   <input
                     ref={inputRef}
@@ -298,15 +314,24 @@
                     value={scanInput}
                     onChange={(e) => setScanInput(e.target.value)}
                     onKeyDown={handleScan}
+                    // DYNAMIC PLACEHOLDER UPDATES HERE
                     placeholder={
                       scanMode === 'action' ? "Type 1 (Receive) or 2 (Send)..." :
                       scanMode === 'location' ? "Scan Location..." :
-                      scanMode === 'employee' ? "Scan Badge..." : "Scan Part..."
+                      scanMode === 'employee' ? "Scan Badge..." : 
+                      awaitingQuantity ? `Enter Quantity for ${pendingPartName}...` : "Scan Part..."
                     }
-                    className="w-full bg-slate-950 border border-slate-700 text-white text-2xl font-mono rounded-xl p-5 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all shadow-inner placeholder-slate-700"
+                    className={`w-full bg-slate-950 border text-white text-2xl font-mono rounded-xl p-5 outline-none transition-all shadow-inner placeholder-slate-700
+                      ${awaitingQuantity ? 'border-yellow-500/50 focus:border-yellow-500 focus:ring-1 focus:ring-yellow-500' : 'border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500'}
+                    `}
                     autoFocus
                     disabled={isSubmitting}
                   />
+                  {awaitingQuantity && (
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 text-yellow-500 text-sm font-bold animate-pulse">
+                      ENTER QTY
+                    </div>
+                  )}
                 </div>
 
                 {/* STATUS BAR */}
@@ -323,7 +348,7 @@
                 </div>
               </div>
 
-              {/* ACTION BUTTONS (Only show in Action Mode) */}
+              {/* ACTION BUTTONS */}
               {scanMode === 'action' && (
                 <div className="grid grid-cols-2 gap-4">
                   {['Receive', 'Send'].map((act, idx) => (
@@ -350,14 +375,16 @@
                 </div>
               )}
 
-              {/* FINISH BUTTON (Only show if parts exist) */}
+              {/* FINISH BUTTON */}
               {parts.length > 0 && (
                 <button
                   onClick={handleSubmit}
-                  disabled={isSubmitting}
-                  className="w-full py-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-lg shadow-lg shadow-blue-600/20 transition-all flex items-center justify-center gap-3"
+                  disabled={isSubmitting || awaitingQuantity}
+                  className={`w-full py-5 rounded-xl font-bold text-lg shadow-lg transition-all flex items-center justify-center gap-3
+                    ${awaitingQuantity ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}
+                  `}
                 >
-                  {isSubmitting ? 'SAVING...' : `SUBMIT TRANSACTION (${parts.length} Items)`}
+                  {isSubmitting ? 'SAVING...' : awaitingQuantity ? 'FINISH PART ENTRY FIRST...' : `SUBMIT TRANSACTION (${parts.length} Items)`}
                 </button>
               )}
 
@@ -366,14 +393,12 @@
             {/* RIGHT COLUMN: SUMMARY */}
             <div className="space-y-6">
               
-              {/* TRANSACTION INFO CARD (The Layout Fix!) */}
               <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-2xl shadow-lg">
                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Transaction Details</h3>
                 
-                {/* BALANCED LAYOUT: 3 Equal Columns */}
+                {/* 3 EQUAL COLUMNS */}
                 <div className="grid grid-cols-3 gap-3 mb-4">
                   
-                  {/* ACTION */}
                   <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-center text-center">
                     <span className="block text-[10px] text-slate-500 uppercase tracking-wider mb-1">Action</span>
                     <span className="text-blue-400 font-bold text-sm md:text-base leading-none">
@@ -381,7 +406,6 @@
                     </span>
                   </div>
 
-                  {/* LOCATION (With Auto-Fit Text) */}
                   <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-center text-center relative overflow-hidden">
                     <span className="block text-[10px] text-slate-500 uppercase tracking-wider mb-1">Location</span>
                     <span className={`font-bold text-white leading-tight break-words
@@ -391,7 +415,6 @@
                     </span>
                   </div>
 
-                  {/* EMPLOYEE */}
                   <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-center text-center">
                     <span className="block text-[10px] text-slate-500 uppercase tracking-wider mb-1">Employee</span>
                     <span className="text-green-400 font-bold text-sm md:text-base leading-none truncate">
@@ -436,17 +459,12 @@
       );
     }
 
-    // ============================================================================
-    // ROOT APP
-    // ============================================================================
-    
     function App() {
       const [isAuthenticated, setIsAuthenticated] = useState(false);
 
       if (!isAuthenticated) {
         return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
       }
-
       return <InventoryTracker onLogout={() => setIsAuthenticated(false)} />;
     }
 
